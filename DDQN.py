@@ -379,7 +379,6 @@ class MetricLogger:
         self.record_time = time.time()
         time_since_last_record = np.round(self.record_time - last_record_time, 3)
         
-        """
         print(
             f"Episode {episode} - "
             f"Step {step} - "
@@ -390,7 +389,7 @@ class MetricLogger:
             f"Mean Q Value {mean_ep_q} - "
             f"Time Delta {time_since_last_record} - "
             f"Time {datetime.datetime.now().strftime('%Y-%m-%dT%H:%M:%S')}"
-        )"""
+        )
 
         with open(self.save_log, "a") as f:
             f.write(
@@ -446,7 +445,8 @@ for e in range(episodes):
         if done or info["flag_get"]:
             break
 
-        logger.log_episode()
+    logger.log_episode()
 
-        if e % 20 == 0:
-            logger.record(episode=e, epsilon=mario.exploration_rate, step=mario.curr_step)
+    if e % 50 == 0:
+        logger.record(episode=e, epsilon=mario.exploration_rate, step=mario.curr_step)
+        print("Episode: " + str(e))
