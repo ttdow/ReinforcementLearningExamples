@@ -7,6 +7,7 @@ from pathlib import Path
 from collections import deque
 import random, time, datetime, os, copy
 import matplotlib.pyplot as plt
+import gc
 
 # Gym is an OpenAI toolkit for RL
 import gym
@@ -39,7 +40,7 @@ import gym_super_mario_bros
 if gym.__version__ < '0.26':
     env = gym_super_mario_bros.make("SuperMarioBros-1-1-v0", new_step_api=True)
 else:
-    env = gym_super_mario_bros.make("SuperMarioBros-1-1-v0", render_mode='human', apply_api_compatibility=True)
+    env = gym_super_mario_bros.make("SuperMarioBros-1-1-v0", render_mode='rgb_array', apply_api_compatibility=True)
 
 # Limit the action-space to:
 #   0. walk right
@@ -60,13 +61,14 @@ class SkipFrame(gym.Wrapper):
     def step(self, action):
         # Repeat action and sum reward
         total_reward = 0.0
+        done = False
         for i in range(self._skip):
             # Accumulate reward and repeat the same action
-            obs, reward, done, trunk, info = self.env.step(action)
+            obs, reward, done, trunc, info = self.env.step(action)
             total_reward += reward
             if done:
                 break
-        return obs, total_reward, done, trunk, info
+        return obs, total_reward, done, trunc, info
 
 class GrayScaleObservation(gym.ObservationWrapper):
     def __init__(self, enc):
@@ -158,7 +160,6 @@ class MarioNet(nn.Module):
 
 class Mario:
     def __init__(self, state_dim, action_dim, save_dir, checkpoint=None):
-        super().__init__(state_dim, action_dim, save_dir, checkpoint=None)
         self.state_dim = state_dim
         self.action_dim = action_dim
         self.save_dir = save_dir
@@ -168,8 +169,6 @@ class Mario:
         # Mario's DNN to predict the most optimal action
         self.net = MarioNet(self.state_dim, self.action_dim).float()
         self.net = self.net.to(device=self.device)
-        if checkpoint:
-            self.load(checkpoint)
 
         self.exploration_rate = 1
         self.exploration_rate_decay = 0.99999975
@@ -186,9 +185,12 @@ class Mario:
         self.optimizer = torch.optim.Adam(self.net.parameters(), lr=0.00025)
         self.loss_fn = torch.nn.SmoothL1Loss()
 
-        self.burnin = 1e4 # Minimum experiences before training
+        self.burnin = 1e5 # Minimum experiences before training
         self.learn_every = 3 # Number of experiences between updates to Q_online
         self.sync_every = 1e4 # Number of experiences between Q_target and Q_online sync
+
+        if checkpoint:
+            self.load(checkpoint)
 
     def save(self):
         save_path = (
@@ -266,18 +268,14 @@ class Mario:
         return state, next_state, action.squeeze(), reward.squeeze(), done.squeeze()
 
     def td_estimate(self, state, action):
-        current_Q = self.net(state, model="online")[
-            np.arange(0, self.batch_size), action
-        ] # Q_online(s, a)
+        current_Q = self.net(state, model='online')[np.arange(0, self.batch_size), action] # Q_online(s, a)
         return current_Q
 
     @torch.no_grad()
     def td_target(self, reward, next_state, done):
-        next_state_Q = self.net(next_state, model="online")
+        next_state_Q = self.net(next_state, model='online')
         best_action = torch.argmax(next_state_Q, axis=1)
-        next_Q = self.net(next_state, model="target")[
-            np.arange(0, self.batch_size), best_action
-        ]
+        next_Q = self.net(next_state, model='target')[np.arange(0, self.batch_size), best_action]
         return (reward + (1 - done.float()) * self.gamma * next_Q).float()
 
     def update_Q_online(self, td_estimate, td_target):
@@ -467,4 +465,4 @@ for e in range(episodes):
 
     if e % 50 == 0:
         logger.record(episode=e, epsilon=mario.exploration_rate, step=mario.curr_step)
-        print("Episode: " + str(e))
+        gc.collect()
