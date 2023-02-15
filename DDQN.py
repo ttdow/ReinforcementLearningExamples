@@ -157,15 +157,19 @@ class MarioNet(nn.Module):
             return self.target(input)
 
 class Mario:
-    def __init__(self, state_dim, action_dim, save_dir):
+    def __init__(self, state_dim, action_dim, save_dir, checkpoint=None):
+        super().__init__(state_dim, action_dim, save_dir, checkpoint=None)
         self.state_dim = state_dim
         self.action_dim = action_dim
         self.save_dir = save_dir
+
         self.device = "cuda" if torch.cuda.is_available() else 'cpu'
 
         # Mario's DNN to predict the most optimal action
         self.net = MarioNet(self.state_dim, self.action_dim).float()
         self.net = self.net.to(device=self.device)
+        if checkpoint:
+            self.load(checkpoint)
 
         self.exploration_rate = 1
         self.exploration_rate_decay = 0.99999975
@@ -174,7 +178,7 @@ class Mario:
 
         self.save_every = 5e5 # Number of experiences between saving MarioNet
 
-        self.memory = deque(maxlen=100000)
+        self.memory = deque(maxlen=70000)
         self.batch_size = 32
 
         self.gamma = 0.9
@@ -194,6 +198,18 @@ class Mario:
             dict(model=self.net.state_dict(), exploration_rate=self.exploration_rate), save_path,
         )
         print(f"MarioNet saved to {save_path} at step {self.curr_step}")
+
+    def load(self, load_path):
+        if not load_path.exists():
+            raise ValueError(f"{load_path} does not exist")
+        
+        ckp = torch.load(load_path, map_location=(self.device))
+        exploration_rate = ckp.get('exploration_rate')
+        state_dict = ckp.get('model')
+
+        print(f"Loading model at {load_path} with exploration rate {exploration_rate}")
+        self.net.load_state_dict(state_dict)
+        self.exploration_rate = exploration_rate
 
     def act(self, state):
         # Given a state, choose an epsilon-greedy action and update value of step
@@ -282,7 +298,7 @@ class Mario:
         if self.curr_step % self.save_every == 0:
             self.save()
 
-        if self.curr_step % self.burnin:
+        if self.curr_step < self.burnin:
             return None, None
 
         if self.curr_step % self.learn_every != 0:
@@ -411,7 +427,9 @@ print()
 save_dir = Path("checkpoints") / datetime.datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
 save_dir.mkdir(parents=True)
 
-mario = Mario(state_dim=(4, 84, 84), action_dim=env.action_space.n, save_dir=save_dir)
+checkpoint = Path('./checkpoints/mario_net.chkpt')
+
+mario = Mario(state_dim=(4, 84, 84), action_dim=env.action_space.n, save_dir=save_dir, checkpoint=checkpoint)
 
 logger = MetricLogger(save_dir)
 

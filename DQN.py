@@ -6,7 +6,6 @@ import matplotlib
 import matplotlib.pyplot as plt
 from collections import namedtuple, deque
 from itertools import count
-from PIL import Image
 
 import torch
 import torch.nn as nn
@@ -97,7 +96,7 @@ def select_action(state):
 episode_durations = []
 
 def plot_durations(show_result=False):
-    plt.figure()
+    plt.figure(1)
     durations_t = torch.tensor(episode_durations, dtype=torch.float)
     if show_result:
         plt.title('Result')
@@ -168,12 +167,12 @@ def optimize_model():
 if torch.cuda.is_available():
     num_episodes = 600
 else:
-    num_episodes = 50
+    num_episodes = 400
 
 for i_episode in range(num_episodes):
     # Initialize the environment and get it's state
     state, info = env.reset()
-    state = torch.tensor(state, dtype=torch.float32, device=device)
+    state = torch.tensor(state, dtype=torch.float32, device=device).unsqueeze(0)
     for t in count():
         action = select_action(state)
         observation, reward, terminated, truncated, _ = env.step(action.item())
