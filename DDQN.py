@@ -40,7 +40,7 @@ import gym_super_mario_bros
 if gym.__version__ < '0.26':
     env = gym_super_mario_bros.make("SuperMarioBros-1-1-v0", new_step_api=True)
 else:
-    env = gym_super_mario_bros.make("SuperMarioBros-1-1-v0", render_mode='human', apply_api_compatibility=True)
+    env = gym_super_mario_bros.make("SuperMarioBros-1-1-v0", render_mode='rgb_array', apply_api_compatibility=True)
 
 # Limit the action-space to:
 #   0. walk right
