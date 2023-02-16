@@ -40,7 +40,7 @@ import gym_super_mario_bros
 if gym.__version__ < '0.26':
     env = gym_super_mario_bros.make("SuperMarioBros-1-1-v0", new_step_api=True)
 else:
-    env = gym_super_mario_bros.make("SuperMarioBros-1-1-v0", render_mode='rgb_array', apply_api_compatibility=True)
+    env = gym_super_mario_bros.make("SuperMarioBros-1-1-v0", render_mode='human', apply_api_compatibility=True)
 
 # Limit the action-space to:
 #   0. walk right
@@ -175,15 +175,12 @@ class Mario:
         self.exploration_rate_min = 0.1
         self.curr_step = 0
 
-        self.save_every = 5e5 # Number of experiences between saving MarioNet
+        self.save_every = 2e5 # Number of experiences between saving MarioNet
 
-        self.memory = deque(maxlen=70000)
+        self.memory = deque(maxlen=60000)
         self.batch_size = 32
 
         self.gamma = 0.9
-
-        self.optimizer = torch.optim.Adam(self.net.parameters(), lr=0.00025)
-        self.loss_fn = torch.nn.SmoothL1Loss()
 
         self.burnin = 1e5 # Minimum experiences before training
         self.learn_every = 3 # Number of experiences between updates to Q_online
@@ -192,10 +189,11 @@ class Mario:
         if checkpoint:
             self.load(checkpoint)
 
+        self.optimizer = torch.optim.Adam(self.net.parameters(), lr=0.00025)
+        self.loss_fn = torch.nn.SmoothL1Loss()
+
     def save(self):
-        save_path = (
-            self.save_dir / f"mario_net_{int(self.curr_step // self.save_every)}.chkpt"
-        )
+        save_path = self.save_dir / f"mario_net_{int(self.curr_step // self.save_every)}.chkpt"
         torch.save(
             dict(model=self.net.state_dict(), exploration_rate=self.exploration_rate), save_path,
         )
@@ -211,6 +209,7 @@ class Mario:
 
         print(f"Loading model at {load_path} with exploration rate {exploration_rate}")
         self.net.load_state_dict(state_dict)
+        #self.net = self.net.to(device=self.device)
         self.exploration_rate = exploration_rate
 
     def act(self, state):
