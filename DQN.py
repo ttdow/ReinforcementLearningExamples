@@ -1,4 +1,4 @@
-import gymnasium as gym
+import gym as gym
 import math
 import random
 import numpy as np
@@ -67,7 +67,7 @@ lr = 1e-4
 n_actions = env.action_space.n
 
 # Get number of state observations
-state, info = env.reset()
+state = env.reset()
 n_observations = len(state)
 
 policy_net = DQN(n_observations, n_actions).to(device)
@@ -171,11 +171,11 @@ else:
 
 for i_episode in range(num_episodes):
     # Initialize the environment and get it's state
-    state, info = env.reset()
+    state = env.reset()
     state = torch.tensor(state, dtype=torch.float32, device=device).unsqueeze(0)
     for t in count():
         action = select_action(state)
-        observation, reward, terminated, truncated, _ = env.step(action.item())
+        observation, reward, terminated, truncated = env.step(action.item())
         reward = torch.tensor([reward], device=device)
         done = terminated or truncated
 

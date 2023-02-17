@@ -3,6 +3,7 @@ import time
 import threading
 from queue import Queue
 import win32gui
+from win32api import GetSystemMetrics
 import mss
 import mss.tools
 from pynput.keyboard import Key, Listener
@@ -51,6 +52,9 @@ class InputCapture:
             exit()
         win32gui.SetForegroundWindow(gameWindow)
 
+
+        print('Width: ', GetSystemMetrics(0))
+        print('Height: ', GetSystemMetrics(1))
         bbox = list(win32gui.GetWindowRect(gameWindow))
         bbox[0] += 8
         bbox[1] += 31

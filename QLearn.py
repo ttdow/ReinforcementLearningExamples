@@ -4,7 +4,14 @@ import random
 import numpy as np
 #from tqdm.notebook import trange
 
-env=gym.make("FrozenLake-v1", render_mode="rgb_array", map_name="4x4", is_slippery=False)
+oldGym = False
+
+if gym.__version__ < '0.26':
+    oldGym = True
+    env=gym.make("FrozenLake-v1", map_name="4x4", is_slippery=False)
+else:
+    env=gym.make("FrozenLake-v1", render_mode="rgb_array", map_name="4x4", is_slippery=False)
+
 env.reset()
 env.render()
 print('Initial state of the system.')
@@ -61,7 +68,9 @@ def train(n_training_episodes, min_epsilon, max_epsilon, epsilon_decay, env, max
 
         # Reset the environment
         state = env.reset()
-        state = state[0]
+        if not oldGym:
+            state = state[0]
+
         step = 0
         done = False
 
@@ -71,8 +80,10 @@ def train(n_training_episodes, min_epsilon, max_epsilon, epsilon_decay, env, max
             action = epsilon_greedy_policy(q, state, epsilon)
 
             # Update next_state
-            new_state, reward, done, trunc, info = env.step(action)
-
+            if not oldGym:
+                new_state, reward, done, trunc, info = env.step(action)
+            else:
+                new_state, reward, done, info = env.step(action)
             # Update Q-Table
             q[state][action] = q[state][action] + learning_rate * (reward + gamma * np.max(q[new_state]) - q[state][action])
 
@@ -100,7 +111,8 @@ def evaluate_agent(env, max_steps, n_eval_episodes, q, seed):
         else:
             state = env.reset()
 
-        state = state[0]
+        if not oldGym:
+            state = state[0]
         step = 0
         done = False
         total_rewards_ep = 0
@@ -108,10 +120,14 @@ def evaluate_agent(env, max_steps, n_eval_episodes, q, seed):
         for step in range(max_steps):
             # Take the action (index) that have the maximum reward
             action = np.argmax(q[state][:])
-            new_state, reward, done, trunc, info = env.step(action)
+            
+            if not oldGym:
+                new_state, reward, done, trunc, info = env.step(action)
+            else:
+                new_state, reward, done, info = env.step(action)
             total_rewards_ep += reward
 
-            if done:
+            if done:        
                 break
             
             state = new_state
