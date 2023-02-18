@@ -83,3 +83,17 @@ plt.hist(
 
 plt.legend()
 plt.show()
+
+class Policy_net:
+    def __init__(self, name: str, env):
+        self.obs_space = env.observation_space
+        self.act_space = env.action_space
+
+        with 
+
+
+# Set up environment
+env = gym.make('MountainCar-v0')
+observation_space = env.observation_space
+action_space = env.action_space
+
