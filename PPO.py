@@ -223,7 +223,7 @@ def plot_learning_curve(x, scores, figure_file):
     plt.savefig(figure_file)
 
 # Make environment            
-env = gym.make('CartPole-v0')
+env = gym.make('CartPole-v1')
 N = 20
 batch_size = 5
 n_epochs = 4
@@ -258,7 +258,7 @@ for i in range(n_episodes):
         
         observation = observation_ # Update current state
 
-    # Update score   
+    # Update score
     score_history.append(score)
     avg_score = np.mean(score_history[-100:])
 

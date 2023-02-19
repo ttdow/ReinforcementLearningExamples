@@ -154,7 +154,9 @@ class MarioNet(nn.Module):
 
     def forward(self, input, model):
         if model == "online":
-            return self.online(input)
+            out = self.online(input)
+            print(out.shape)
+            return out
         elif model == "target":
             return self.target(input)
 
@@ -228,6 +230,7 @@ class Mario:
             state = state[0].__array__() if isinstance(state, tuple) else state.__array__()
             state = torch.tensor(state, device=self.device).unsqueeze(0)
             action_values = self.net(state, model="online")
+            #print(action_values.shape)
             action_idx = torch.argmax(action_values, axis=1).item()
 
         # Decrease exploration_rate
@@ -273,6 +276,7 @@ class Mario:
     @torch.no_grad()
     def td_target(self, reward, next_state, done):
         next_state_Q = self.net(next_state, model='online')
+        print(next_state_Q.shape)
         best_action = torch.argmax(next_state_Q, axis=1)
         next_Q = self.net(next_state, model='target')[np.arange(0, self.batch_size), best_action]
         return (reward + (1 - done.float()) * self.gamma * next_Q).float()
