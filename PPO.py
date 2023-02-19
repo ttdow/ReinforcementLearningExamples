@@ -7,8 +7,41 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.distributions.categorical import Categorical
 
+import matplotlib.pyplot as plt
+
+# Proximal Policy Optimization (PPO) is an architecture that aims to improve our
+#   agent's training stability by avoiding too large policy updates. To do this,
+#   we use a ratio that will indicate the difference between our current and old
+#   policy and clip this ratio from a specific range [1 - epsilon, 1 + epsilon].
+
+# Smaller policy updates during training are more likely to converge to an 
+#   optimal solution.
+# A "too big" step when updating a policy can cause "falling off the cliff" and
+#   having a long time or even no possibility to recover.
+# PPO removes the incentive for the current policy to go too far from the old 
+#   one (hence proximal)
+
+# Policy objective function:
+#   L_PG(theta) = E_t(log(pi_theta(a_t | s_t)) * A_t)
+#               = E_t(log probability of (a_t | s_t)) * advantage if A>0
+
+# PPO's Clipped surrogate objective function:
+#   L_CLIP(theta) = E_hat_t(min(r_t(theta) * A_hat_t, clip(r_t(theta), 1-epsilon, 1+epsilon) * A_hat_t))
+#       Where: r_t(theta) = pi_theta(a_t | s_t) / pi_theta_old(a_t | s_t) # Ratio function
+#           If r_t(theta) > 1, the action a_t in state s_t is more likely in the current policy
+#               than in the previous policy and vice versa - i.e. the divergence between old and new
+
+# Trust Region Policy Optimization (TRPO) uses KL divergence constraints outside 
+#   the objective function to constrain the policy update.
+# PPO clip probability ratio directly in the objective function with its Clipped
+#   surrogate objective function.
+
+# Final PPO's Actor Critic Objective Function
+#   L_t_CLIP+VF+S(theta) = E_hat_t(L_t_CLIP(theta) - c_1 * L_t_VF(theta) + c_2 * S(pi_theta)(s_t))
+
+# Actor's neural net
 class ActorNetwork(nn.Module):
-    def __init__(self, n_actions, input_dims, alpha, fc1_dims=256, fc2_dims=256, chkpt_dir='tmp/ppo'):
+    def __init__(self, n_actions, input_dims, alpha, fc1_dims=256, fc2_dims=256, chkpt_dir='ppo'):
         super(ActorNetwork, self).__init__()
 
         self.checkpoint_file = os.path.join(chkpt_dir, 'actor_torch_ppo')
@@ -39,7 +72,7 @@ class ActorNetwork(nn.Module):
         self.load_state_dict(torch.load(self.checkpoint_file))
 
 class CriticNetwork(nn.Module):
-    def __init__(self, input_dims, alpha, fc1_dims=256, fc2_dims=256, chkpt_dir='tmp/ppo'):
+    def __init__(self, input_dims, alpha, fc1_dims=256, fc2_dims=256, chkpt_dir='ppo'):
         super(CriticNetwork, self).__init__()
 
         self.checkpoint_file = os.path.join(chkpt_dir, 'critic_torch_ppo')
@@ -54,7 +87,7 @@ class CriticNetwork(nn.Module):
         )
 
         self.optimizer = optim.Adam(self.parameters(), lr=alpha)
-        self.device = torch.device('cuda:0' if torch.cuda_is_available() else 'cpu')
+        self.device = torch.device('cuda:0' if torch.cuda.  is_available() else 'cpu')
         self.to(self.device)
 
     def forward(self, state):
@@ -123,7 +156,7 @@ class Agent:
         self.critic.load_checkpoint()
 
     def choose_action(self, observation):
-        state = torch.tensor([observation], dtype=torch.float).to(self.actor.device)
+        state = torch.tensor(np.array(observation), dtype=torch.float).to(self.actor.device)
 
         dist = self.actor(state)
         value = self.critic(state)
@@ -137,7 +170,7 @@ class Agent:
 
     def learn(self):
         for _ in range(self.n_epochs):
-            state_arr, action_arr, old_prob_arr, vals_arr, reward_arr, dones_arr, batches = self.memorygenerate_batches()
+            state_arr, action_arr, old_prob_arr, vals_arr, reward_arr, dones_arr, batches = self.memory.generate_batches()
             values = vals_arr
             advantage = np.zeros(len(reward_arr), dtype=np.float32)
 
@@ -180,12 +213,59 @@ class Agent:
                 self.critic.optimizer.step()
 
         self.memory.clear_memory()
-            
+
+def plot_learning_curve(x, scores, figure_file):
+    running_avg = np.zeros(len(scores))
+    for i in range(len(running_avg)):
+        running_avg[i] = np.mean(scores[max(0, i-100):(i+1)])
+    plt.plot(x, running_avg)
+    plt.title("Running average of previous 100 scores")
+    plt.savefig(figure_file)
+
+# Make environment            
 env = gym.make('CartPole-v0')
 N = 20
 batch_size = 5
 n_epochs = 4
 alpha = 0.0003
 
-actor = ActorNetwork(1, 1, 1)
-actor.forward(1)
+# Make agent
+agent = Agent(n_actions=env.action_space.n, batch_size=batch_size, alpha=alpha, n_epochs=n_epochs, input_dims=env.observation_space.shape)
+n_episodes = 300
+figure_file = 'ppo/cartpole.png'
+best_score = env.reward_range[0]
+score_history = []
+
+learn_iters = 0
+avg_score = 0
+n_steps = 0
+
+for i in range(n_episodes):
+    observation = env.reset() # Get new state
+    done = False
+    score = 0
+
+    while not done:
+        action, prob, val = agent.choose_action(observation) # Get agent's next action
+        observation_, reward, done, info = env.step(action) # Play out action
+        n_steps += 1
+        score += reward
+        agent.remember(observation, action, prob, val, reward, done) # Save outcomes
+        
+        if n_steps % N == 0:
+            agent.learn() # Update policy
+            learn_iters += 1
+        
+        observation = observation_ # Update current state
+
+    # Update score   
+    score_history.append(score)
+    avg_score = np.mean(score_history[-100:])
+
+    if avg_score > best_score:
+        best_score = avg_score
+        agent.save_models()
+
+    print('episode: ', i, ' score: %.1f' % score, ' avg score: %.1f' % avg_score, 'time_steps', n_steps, 'learning_steps', learn_iters)
+    x = [i+1 for i in range(len(score_history))]
+    plot_learning_curve(x, score_history, figure_file)
