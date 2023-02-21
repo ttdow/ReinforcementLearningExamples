@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 import torch
 from torch import nn
 from torch import optim
+from torch.utils.tensorboard import SummaryWriter
 
 import gym
 from gym.spaces import Discrete
@@ -151,7 +152,7 @@ class MLPActor(nn.Module):
 
 # Transitions buffer. Stores tansitions for a single episode.
 class ReplayBuffer:
-    def __init__(self, act_dim, obs_dim, size=1000, expert_data_path='', expert_buffer=None):
+    def __init__(self, act_dim, obs_dim, size=10000, expert_data_path='', expert_buffer=None):
         self.rewards = np.zeros([size], dtype=np.float32)
         self.actions = np.zeros([size, act_dim], dtype=np.float32)
         self.states = np.zeros([size, obs_dim], dtype=np.float32)
@@ -305,9 +306,9 @@ def AIRL(env, n_epochs, steps_per_epoch, max_eps_length, clip_ratio, entropy_reg
     loss_criterion = nn.BCELoss()
 
     run_t = time.strftime('%Y-%m-%d-%H-%M-%S')
-    path = os.path.join('data', 'MountainCar-v0', run_t)
+    path = os.path.join('data', env.unwrapped.spec.id + '_' + run_t)
 
-    #logger = SummaryWriting(log_dir=path)
+    logger = SummaryWriter(log_dir=path)
 
     # Hold epoch losses for logging
     pi_losses, disc_losses, delta_disc_logs, delta_pi_logs = [], [], [], []
@@ -405,7 +406,7 @@ def AIRL(env, n_epochs, steps_per_epoch, max_eps_length, clip_ratio, entropy_reg
         # Train with expert demonstrations
         #   log(D(s, a, s'))
         for i in range(5): #40
-            print("Training discriminator: ", i+1, "/40")
+            print("Training discriminator: ", i+1, "/5")
             actor.disc.zero_grad()
 
             av_demo_output, err_demo = compute_disc_loss(*exp_data, log_p=log_p, label=label.fill_(real_label))
@@ -432,7 +433,7 @@ def AIRL(env, n_epochs, steps_per_epoch, max_eps_length, clip_ratio, entropy_reg
         kl_start = epoch >= 20
 
         for i in range(5): #80
-            print("Training policy: ", i+1, "/80")
+            print("Training policy: ", i+1, "/5")
             pi_optimizer.zero_grad()
 
             pi_loss, kl, entropy = compute_pi_loss(log_p, act, *exp_data)
@@ -443,7 +444,7 @@ def AIRL(env, n_epochs, steps_per_epoch, max_eps_length, clip_ratio, entropy_reg
             pi_loss.backward()
             pi_optimizer.step()
 
-        #logger.add_scalar('PiStopIter', i, epoch)
+        logger.add_scalar('PiStopIter', i, epoch)
 
         pi_loss = pi_loss.item()
 
@@ -454,6 +455,26 @@ def AIRL(env, n_epochs, steps_per_epoch, max_eps_length, clip_ratio, entropy_reg
 
         delta_disc_loss = disc_loss_old - disc_loss
         delta_pi_loss = pi_loss_old.item() - pi_loss
+
+        delta_disc_logs.append(delta_disc_loss)
+        delta_pi_logs.append(delta_pi_loss)
+        err_demo_logs.append(err_demo)
+        err_sample_logs.append(err_pi_samples)
+        entropy_logs.append(entropy)
+
+        logger.add_scalar('loss/pi', pi_loss, epoch)
+        logger.add_scalar('loss/D', disc_loss, epoch)
+        logger.add_scalar('loss/D[demo]', err_demo, epoch)
+        logger.add_scalar('loss/D[pi]', err_pi_samples, epoch)
+
+        logger.add_scalar('loss/Delta-Pi', delta_pi_loss, epoch)
+        logger.add_scalar('loss/Delta-Disc', delta_disc_loss, epoch)
+
+        logger.add_scalar('Disc-Output/Expert', av_demo_output, epoch)
+        logger.add_scalar('Disc-Output/LearnedPolicy', av_pi_output, epoch)
+
+        logger.add_scalar('Kl', kl, epoch)
+        logger.add_scalar('Entropy', entropy, epoch)
 
     start_time = time.time()
 
@@ -484,8 +505,9 @@ def AIRL(env, n_epochs, steps_per_epoch, max_eps_length, clip_ratio, entropy_reg
             terminal = done or eps_len == max_eps_len
 
             if terminal or step == steps_per_epoch - 1:
-                #if terminal:
-                    # logging stuff
+                if terminal:
+                    eps_len_logs += [eps_len]
+                    eps_ret_logs += [eps_ret]
 
                 obs = env.reset()
                 obs = obs[0]
@@ -500,13 +522,54 @@ def AIRL(env, n_epochs, steps_per_epoch, max_eps_length, clip_ratio, entropy_reg
         RunTime = time.time() - start_time
         AverageEpisodeLen = np.mean(eps_len_logs)
 
+        logger.add_scalar('AvEpsLen', AverageEpisodeLen, l_t)
+        MaxEpisodeLen = np.max(eps_len_logs)
+        MinEpisodeLen = np.min(eps_len_logs)
+        AverageEpsReturn = np.mean(eps_ret_logs)
+        MaxEpsReturn = np.max(eps_ret_logs)
+        MinEpsReturn = np.min(eps_ret_logs)
+
+        logger.add_scalar('EpsReturn/Max', MaxEpsReturn, l_t)
+        logger.add_scalar('EpsReturn/Min', MinEpsReturn, l_t)
+        logger.add_scalar('EpsReturn/Average', AverageEpsReturn, l_t)
+
         # Retrieved by index, not the time step
-        #Pi_Loss = pi_losses[t]
-        #Disc_Loss = disc_logs[t]
-        #Kl = pi_kl[t]
-        #delta_disc_loss = delta_disc_logs[t]
-        #delta_pi_loss = delta_pi_logs[t]
-        #disc_outs = disc_outputs[t]
+        Pi_Loss = pi_losses[t]
+        Disc_Loss = disc_logs[t]
+        Kl = pi_kl[t]
+        delta_disc_loss = delta_disc_logs[t]
+        delta_pi_loss = delta_pi_logs[t]
+        disc_outs = disc_outputs[t]
+
+        if t == 0:
+            first_run_ret = AverageEpsReturn
+
+        all_logs = {
+            'AverageEpsReturn': AverageEpsReturn,
+            'MinEpsReturn': MinEpsReturn,
+            'MaxEpsReturn': MaxEpsReturn,
+            'KL': Kl,
+            'Entropy': entropy_logs[t],
+            'AverageEpisodeLen': AverageEpisodeLen,
+            'Pi_Loss': Pi_Loss,
+            'Disc_Loss': Disc_Loss,
+            'FirstEpochAvReturn': first_run_ret,
+            'Delta-Pi': delta_pi_loss,
+            'Delta-D': delta_disc_loss,
+            'Disc-DemoLoss': err_demo_logs[t],
+            'Disc-SamplesLoss': err_sample_logs[t],
+            'AvDisc-Demo-Output': disc_outs[0],
+            'AvDisc-PiSamples-Output': disc_outs[1],
+            'RunTime': RunTime
+        }
+
+        print('\n', t+1)
+        print('-' * 35)
+
+        for k, v in all_logs.items():
+            print(k, v)
+
+        print('\n\n\n')
 
     print("Finished")
 
