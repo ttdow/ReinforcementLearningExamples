@@ -40,7 +40,7 @@ import gym_super_mario_bros
 if gym.__version__ < '0.26':
     env = gym_super_mario_bros.make("SuperMarioBros-1-1-v0", new_step_api=True)
 else:
-    env = gym_super_mario_bros.make("SuperMarioBros-1-1-v0", render_mode='human', apply_api_compatibility=True)
+    env = gym_super_mario_bros.make("SuperMarioBros-1-1-v0", render_mode='rgb_array', apply_api_compatibility=True)
 
 # Limit the action-space to:
 #   0. walk right
@@ -155,7 +155,7 @@ class MarioNet(nn.Module):
     def forward(self, input, model):
         if model == "online":
             out = self.online(input)
-            print(out.shape)
+            #print(out.shape)
             return out
         elif model == "target":
             return self.target(input)
@@ -276,7 +276,7 @@ class Mario:
     @torch.no_grad()
     def td_target(self, reward, next_state, done):
         next_state_Q = self.net(next_state, model='online')
-        print(next_state_Q.shape)
+        #print(next_state_Q.shape)
         best_action = torch.argmax(next_state_Q, axis=1)
         next_Q = self.net(next_state, model='target')[np.arange(0, self.batch_size), best_action]
         return (reward + (1 - done.float()) * self.gamma * next_Q).float()
