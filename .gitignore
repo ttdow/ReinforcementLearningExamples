@@ -3,3 +3,5 @@
 /tensorboard
 /ppo
 /checkpoints
+/logs
+sql-policy.para

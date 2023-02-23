@@ -7,6 +7,7 @@ from win32api import GetSystemMetrics
 import mss
 import mss.tools
 from pynput.keyboard import Key, Listener
+from PIL import Image, ImageOps
 
 class InputCapture:
     def __init__(self, gameWindowName, dt, sessionsFolder):
@@ -52,15 +53,16 @@ class InputCapture:
             exit()
         win32gui.SetForegroundWindow(gameWindow)
 
+        left, top, right, bottom = win32gui.GetWindowRect(gameWindow)
+        screenHalfWidth = GetSystemMetrics(0)
+        screenHalfHeight = GetSystemMetrics(1)
+        windowHalfWidth = right - left
+        windowHalfHeight = bottom - top
 
-        print('Width: ', GetSystemMetrics(0))
-        print('Height: ', GetSystemMetrics(1))
-        bbox = list(win32gui.GetWindowRect(gameWindow))
-        bbox[0] += 8
-        bbox[1] += 31
-        width = bbox[2]-bbox[0]
-        height = bbox[3]-bbox[1]
-        return {'top': bbox[1], 'left': bbox[0], 'width': width-8, 'height': height-8}
+        return {'top': screenHalfHeight - windowHalfHeight,
+                'left': screenHalfWidth - windowHalfWidth, 
+                'width': windowHalfWidth + windowHalfWidth,
+                'height': windowHalfHeight + windowHalfHeight}
         
     def captureFrames(self):
         # TODO: see if using windows api calls is faster https://www.quora.com/How-can-we-take-screenshots-using-Python-in-Windows
@@ -80,9 +82,64 @@ class InputCapture:
 
             # Grab the data
             sct_img = self.sct.grab(self.gameBbox)
+
+            # 986 x 612
+            # 1, 2, 17, 29, 34, 58
+            # 1, 2, 3, 4, 6, 9, 12, 17, 18, 34, 36, 51, 68
+            img = Image.frombytes("RGB", sct_img.size, sct_img.bgra, "raw", "BGRX")
+            width, height = img.size
+            dx = 0
+            dy = 0
+
+            print(width)
+            print(height)
+
+            if width > height:
+                if width % 3 != 0:
+                    print("here")
+                    if width % 3 == 1:
+                        width += 2
+                    else:
+                        print("there")
+                        width += 1
+
+                print(width)
+                
+                dy = width - height
+
+            elif height > width:
+                if height % 3 != 0:
+                    if height % 3 == 1:
+                        height += 2
+                    else:
+                        height += 1
+                
+                print(width)
+                dx = height - width
+
+            else:
+                if width % 3 != 0:
+                    if width % 3 == 1:
+                        dx += 2
+                        width += dx
+                        dy += 2
+                        height += dy
+                    else:
+                        dx += 1
+                        width += dx
+                        dy += 1
+                        height += dy
+
+            padded = ImageOps.expand(img, (int(dx/2), int(dy/2), int(dx/2), int(dy/2)))
+            print(padded.size)
+            width, height = padded.size
+            resized = padded.resize((int(width / 3), int(height / 3)), Image.NEAREST)
+            print(resized.size)
+
             # Save to the picture file
             fileName = self.capsFolder + str(self.capNumber) + ".png"
-            mss.tools.to_png(sct_img.rgb, sct_img.size, output=fileName)
+            resized.save(fileName)
+            #mss.tools.to_png(sct_img.rgb, sct_img.size, output=fileName)
 
             self.capNumber += 1
 
