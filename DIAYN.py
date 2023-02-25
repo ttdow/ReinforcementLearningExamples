@@ -3,6 +3,11 @@ import numpy as np
 import random
 from collections import namedtuple
 from abc import ABC
+import datetime
+import os
+import time
+import psutil
+import warnings
 
 import torch
 from torch import from_numpy
@@ -11,6 +16,9 @@ from torch.optim.adam import Adam
 import torch.nn.functional as F
 from torch.nn.functional import log_softmax
 from torch.distributions import Normal
+from torch.utils.tensorboard import SummaryWriter
+
+warnings.filterwarnings("ignore")
 
 Transition = namedtuple('Transition', ('state', 'z', 'done', 'action', 'next_state'))
 
@@ -228,7 +236,7 @@ class SACAgent:
         states = torch.cat(batch.state).view(self.batch_size, self.n_states + self.n_skills).to(self.device)
         zs = torch.cat(batch.z).view(self.batch_size, 1).long().to(self.device)
         dones = torch.cat(batch.done).view(self.batch_size, 1).to(self.device)
-        actions = torch.cat(batch.action).view(-1, self.config['n_actions']).to(self.device)
+        actions = torch.cat(batch.action).view(-1, self.config['n_actions'][0]).to(self.device)
         next_states = torch.cat(batch.next_state).view(self.batch_size, self.n_states + self.n_skills).to(self.device)
 
         return states, zs, dones, actions, next_states
@@ -256,6 +264,127 @@ class SACAgent:
             logq_z_ns = log_softmax(logits, dim=-1)
             rewards = logq_z_ns.gather(-1, zs).detach() - torch.log(p_z + 1e-6)
 
+            # Calculating the Q-value target
+            with torch.no_grad():
+                target_q = self.config['reward_scale'] * rewards.float() + self.config['gamma'] * self.value_target_network(next_states) * (~dones)
+            
+            q1 = self.q_value_network1(states, actions)
+            q2 = self.q_value_network2(states, actions)
+            q1_loss = self.mse_loss(q1, target_q)
+            q2_loss = self.mse_loss(q2, target_q)
+
+            policy_loss = (self.config['alpha'] * log_probs - q).mean()
+            logits = self.discriminator(torch.split(states, [self.n_states, self.n_skills], dim=-1)[0])
+            discriminator_loss = self.cross_ent_loss(logits, zs.squeeze(-1))
+
+            self.policy_opt.zero_grad()
+            policy_loss.backward()
+            self.policy_opt.step()
+
+            self.value_opt.zero_grad()
+            value_loss.backward()
+            self.value_opt.step()
+
+            self.q_value1_opt.zero_grad()
+            q1_loss.backward()
+            self.q_value1_opt.step()
+
+            self.q_value2_opt.zero_grad()
+            q2_loss.backward()
+            self.q_value2_opt.step()
+
+            self.discriminator_opt.zero_grad()
+            discriminator_loss.backward()
+            self.discriminator_opt.step()
+
+            for target_param, local_param in zip(self.value_target_network.parameters(), self.value_network.parameters()):
+                target_param.data.copy_(self.config['tau'] * local_param.data + (1 - self.config['tau'] * target_param.data))
+
+            return -discriminator_loss.item()
+
+class Logger:
+    def __init__(self, agent, **config):
+        self.config = config
+        self.agent = agent
+        #self.log_dir = self.config['env_name'][:-3] + "/" + datetime.datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+        self.log_dir = "test"
+        self.start_time = 0
+        self.duration = 0
+        self.running_logq_zs = 0
+        self.max_episode_reward = -np.inf
+        self.turn_on = False
+        self.to_gb = lambda in_bytes: in_bytes / 1024 / 1024 / 1024
+
+        if self.config['do_train'] and self.config['train_from_scratch']:
+            self._create_weights_folder(self.log_dir)
+            self._log_params()
+
+    @staticmethod
+    def _create_weights_folder(dir):
+        if not os.path.exists(dir):
+            os.mkdir(dir)
+        #os.mkdir(dir)
+
+    def _log_params(self):
+        with SummaryWriter("Logs/" + self.log_dir) as writer:
+            for k, v in self.config.items():
+                writer.add_text(k, str(v))
+
+    def on(self):
+        self.start_time = time.time()
+        self._turn_on = True
+    
+    def _off(self):
+        self.duration = time.time() - self.start_time
+
+    def log(self, *args):
+        if not self._turn_on:
+            print("First you should turn the logger on once, via on() method to be able to log parameters.")
+            return
+        self._off()
+
+        episode, episode_reward, skill, logq_zs, step, *rng_states = args
+
+        self.max_episode_reward = max(self.max_episode_reward, episode_reward)
+
+        if self.running_logq_zs == 0:
+            self.running_logq_zs = logq_zs
+        else:
+            self.running_logq_zs = 0.99 * self.running_logq_zs + 0.01 * logq_zs
+            
+        ram = psutil.virtual_memory()
+        assert self.to_gb(ram.used) < 0.98 * self.to_gb(ram.total), "RAM usage exceeds permitted limit!"
+
+        #if episode % (self.config['interval'] // 3) == 0:
+            #self._save_weights(episode, *rng_states)
+
+        if episode % self.config['interval'] == 0:
+            print("E: {}| "
+                  "Skill: {}| "
+                  "E_Reward: {:.1f}| "
+                  "EP_Duration: {:.2f}| "
+                  "Memory_Length: {}| "
+                  "Mean_steps_time: {:.3f}| "
+                  "{:.1f}/{:.1f} GB RAM| "
+                  "Time: {} ".format(episode,
+                                     skill,
+                                     episode_reward,
+                                     self.duration,
+                                     len(self.agent.memory),
+                                     self.duration / step,
+                                     self.to_gb(ram.used),
+                                     self.to_gb(ram.total),
+                                     datetime.datetime.now().strftime("%H:%M:%S"),
+                                     ))
+            
+        with SummaryWriter("Logs/" + self.log_dir) as writer:
+            writer.add_scalar("Max episode reward", self.max_episode_reward, episode)
+            writer.add_scalar("Running logq(z|s)", self.running_logq_zs, episode)
+            #writer.add_histogram(str(skill), episode_reward)
+            #writer.add_histogram("Total Rewards", episode_reward)
+
+        self.on()
+        
 
 def concat_state_latent(s, z_, n):
     z_one_hot = np.zeros(n)
@@ -264,7 +393,7 @@ def concat_state_latent(s, z_, n):
 
 params = {"lr": 3e-4,
           "batch_size": 256,
-          "max_n_episodes": 5000,
+          "max_n_episodes": 50,
           "max_episode_len": 1000,
           "gamma": 0.99,
           "alpha": 0.1,
@@ -272,36 +401,40 @@ params = {"lr": 3e-4,
           "n_hiddens": 300,
           "seed": 0,
           "n_skills": 50,
-          "mem_size": 50000}
+          "mem_size": 50000,
+          "env_name": "MountainCarContinuous-v0",
+          "do_train": True,
+          "train_from_scratch": True,
+          "interval": 5,
+          "reward_scale": 1}
 
 env = gym.make('MountainCarContinuous-v0')
 n_states = env.observation_space.shape
 n_actions = env.action_space.shape
 action_bounds = [env.observation_space.low[0], env.action_space.high[0]]
-print(n_states, ",", n_actions, ",", action_bounds)
 
 params.update({"n_states": n_states,
                "n_actions": n_actions,
                "action_bounds": action_bounds})
 
-print("params:", params)
 env.close()
 del env, n_states, n_actions, action_bounds
 
-env = gym.make('MountainCarContinuous-v0')
+env = gym.make('MountainCarContinuous-v0', render_mode="rgb_array")
 
 p_z = np.full(params['n_skills'], 1 / params['n_skills'])
 agent = SACAgent(p_z=p_z, **params)
-#logger = Logger(agent, **params)
+logger = Logger(agent, **params)
 
 min_episode = 0
 last_logq_zs = 0
 np.random.seed(params['seed'])
 env.observation_space.seed(params['seed'])
 
-#logger.on()
+logger.on()
 
 for episode in range(1 + min_episode, params['max_n_episodes'] + 1):
+    print("Episode: ", episode, "/", params['max_n_episodes'])
     z = np.random.choice(params['n_skills'])
     state = env.reset()
     state = state[0]
@@ -310,13 +443,25 @@ for episode in range(1 + min_episode, params['max_n_episodes'] + 1):
     logq_zses = []
 
     max_n_steps = min(params["max_episode_len"], env.spec.max_episode_steps)
-
     for step in range(1, 1 + max_n_steps):
         action = agent.choose_action(state)
         next_state, reward, done, trunc, info = env.step(action)
         next_state = concat_state_latent(next_state, z, params['n_skills'])
         agent.store(state, z, done, action, next_state)
         logq_zs = agent.train()
+
         if logq_zs is None:
             logq_zses.append(last_logq_zs)
         else:
+            logq_zses.append(logq_zs)
+        
+        episode_reward += reward
+        state = next_state
+        
+        if done:
+            break
+
+    logger.log(episode, episode_reward, z, sum(logq_zses) / len(logq_zses), 
+               step, np.random.get_state()) #env.np_random.random.get_state(), 
+               #env.observation_space.np_random.get_state(), 
+               #env.action_space.np_random.get_state(), *agent.get_rng_states())
