@@ -5,3 +5,4 @@
 /checkpoints
 /logs
 sql-policy.para
+/__pycache__
