@@ -3,6 +3,9 @@
 /data
 /logs
 /ppo
+/ppo/*
+/checkpoints/*
+/tensorboard/*
 /sessions
 /tensorboard
 sql-policy.para
