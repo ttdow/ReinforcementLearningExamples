@@ -1,8 +1,8 @@
+/__pycache__
+/checkpoints
 /data
+/logs
+/ppo
 /sessions
 /tensorboard
-/ppo
-/checkpoints
-/logs
 sql-policy.para
-/__pycache__

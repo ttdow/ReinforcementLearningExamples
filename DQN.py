@@ -154,6 +154,7 @@ def optimize_model():
 
     # Computer Huber Loss
     criterion = nn.SmoothL1Loss()
+    print(state_action_values.shape)
     loss = criterion(state_action_values, expected_state_action_values.unsqueeze(1))
 
     # Optimize the model

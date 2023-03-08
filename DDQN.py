@@ -40,7 +40,7 @@ import gym_super_mario_bros
 if gym.__version__ < '0.26':
     env = gym_super_mario_bros.make("SuperMarioBros-1-1-v0", new_step_api=True)
 else:
-    env = gym_super_mario_bros.make("SuperMarioBros-1-1-v0", render_mode='rgb_array', apply_api_compatibility=True)
+    env = gym_super_mario_bros.make("SuperMarioBros-1-1-v0", render_mode='human', apply_api_compatibility=True)
 
 # Limit the action-space to:
 #   0. walk right
@@ -71,7 +71,7 @@ class SkipFrame(gym.Wrapper):
         return obs, total_reward, done, trunc, info
 
 class GrayScaleObservation(gym.ObservationWrapper):
-    def __init__(self, enc):
+    def __init__(self, env):
         super().__init__(env)
         obs_shape = self.observation_space.shape[:2]
         self.observation_space = Box(low=0, high=255, shape=obs_shape, dtype=np.uint8)
@@ -179,7 +179,7 @@ class Mario:
 
         self.save_every = 2e5 # Number of experiences between saving MarioNet
 
-        self.memory = deque(maxlen=60000)
+        self.memory = deque(maxlen=50000)
         self.batch_size = 32
 
         self.gamma = 0.9
