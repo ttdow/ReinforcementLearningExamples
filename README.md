@@ -4,7 +4,7 @@ Example projects for Reinforcement Learning using PyTorch.
 
 <h1>References</h1>
 
-<h2>Reinforcement Learning<h2>
+<h2>Reinforcement Learning</h2>
 
 <ul>
     <li>QLearn - https://www.datacamp.com/tutorial/introduction-q-learning-beginner-tutorial</li>
