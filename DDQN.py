@@ -40,7 +40,7 @@ import gym_super_mario_bros
 if gym.__version__ < '0.26':
     env = gym_super_mario_bros.make("SuperMarioBros-1-1-v0", new_step_api=True)
 else:
-    env = gym_super_mario_bros.make("SuperMarioBros-1-1-v0", render_mode='rgb_array', apply_api_compatibility=True)
+    env = gym_super_mario_bros.make("SuperMarioBros-1-1-v0", render_mode='human', apply_api_compatibility=True)
 
 # Limit the action-space to:
 #   0. walk right
@@ -166,7 +166,10 @@ class Mario:
         self.action_dim = action_dim
         self.save_dir = save_dir
 
-        self.device = "cuda" if torch.cuda.is_available() else 'cpu'
+        self.device = "cpu" #"cuda:0" if torch.cuda.is_available() else 'cpu'
+        print()
+        print(self.device)
+        print()
 
         # Mario's DNN to predict the most optimal action
         self.net = MarioNet(self.state_dim, self.action_dim).float()
@@ -431,6 +434,8 @@ save_dir.mkdir(parents=True)
 checkpoint = Path('./checkpoints/mario_net.chkpt')
 
 mario = Mario(state_dim=(4, 84, 84), action_dim=env.action_space.n, save_dir=save_dir, checkpoint=checkpoint)
+
+mario.exploration_rate = 0.25
 
 logger = MetricLogger(save_dir)
 
