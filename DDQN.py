@@ -174,7 +174,7 @@ class Mario:
 
         self.exploration_rate = 1
         self.exploration_rate_decay = 0.99999975
-        self.exploration_rate_min = 0.1
+        self.exploration_rate_min = 0.01
         self.curr_step = 0
 
         self.save_every = 2e5 # Number of experiences between saving MarioNet
@@ -423,12 +423,11 @@ class MetricLogger:
 
 use_cuda = torch.cuda.is_available()
 print(f"Using CUDA: {use_cuda}")
-print()
 
 save_dir = Path("checkpoints") / datetime.datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
 save_dir.mkdir(parents=True)
 
-checkpoint = Path('./checkpoints/mario_net.chkpt')
+checkpoint = Path('./mario_net.chkpt')
 
 mario = Mario(state_dim=(4, 84, 84), action_dim=env.action_space.n, save_dir=save_dir, checkpoint=checkpoint)
 
