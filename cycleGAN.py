@@ -130,7 +130,7 @@ class ImageDataset(Dataset):
         self.mode = mode
         
         if self.mode == 'train':
-            self.files_A = sorted(glob.glob(os.path.join(root + '/monet_jpg') + '/*.*')[:250])
+            self.files_A = sorted(glob.glob(os.path.join(root + '/  _jpg') + '/*.*')[:250])
             self.files_B = sorted(glob.glob(os.path.join(root + '/photo_jpg') + '/*.*')[:250])
         elif self.mode == 'test':
             self.files_A = sorted(glob.glob(os.path.join(root + '/monet_jpg') + '/*.*')[250:])
