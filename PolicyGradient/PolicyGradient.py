@@ -9,90 +9,6 @@ from torch.distributions import Categorical
 
 import gym
 
-'''
-# Define the policy network
-class Policy(nn.Module):
-    def __init__(self, obs_size, action_size, hidden_size):
-        super(Policy, self).__init__()
-        self.fc1 = nn.Linear(obs_size, hidden_size)
-        self.fc2 = nn.Linear(hidden_size, action_size)
-
-    def forward(self, x):
-        x = torch.relu(self.fc1(x))
-        x = torch.softmax(self.fc2(x), dim=-1)
-        return x
-    
-# Define the policy gradient algorithm
-def policy_gradient(env_name, hidden_size, learning_rate, num_episodes):
-
-    # Create the environment
-    env = gym.make(env_name)
-    obs_size = env.observation_space.shape[0]
-    action_size = env.action_space.n
-
-    # Create the policy network
-    policy = Policy(obs_size, action_size, hidden_size)
-
-    # Create the optimizer
-    optimizer = optim.Adam(policy.parameters(), lr=learning_rate)
-
-    # Iterate over episodes
-    for episode in range(num_episodes):
-        
-        # Initialize episode
-        obs = env.reset()[0]
-        done = False
-        episode_reward = 0
-        log_probs = []
-        rewards = []
-
-        # Iterate over timesteps in episode
-        while not done:
-
-            # Choose an action based on the policy
-            obs_tensor = torch.from_numpy(obs).float().unsqueeze(0)
-            action_probs = policy(obs_tensor)
-            dist = torch.distributions.Categorical(action_probs)
-            action = dist.sample()
-            log_prob = dist.log_prob(action)
-            log_probs.append(log_prob)
-
-            # Take the chosen action and observe the next state and reward
-            obs, reward, done, info, _ = env.step(action.item())
-            rewards.append(reward)
-            episode_reward += reward
-
-        # Compute the discounted rewards and normalize them
-        returns = []
-        discount = 0.99
-        c = 0
-
-        if len(returns) > 0:
-            c = returns[-1] * discount
-
-        for i in rewards:
-            i = i + c
-        
-        returns.append(rewards)
-        
-        returns.reverse()
-        returns = torch.tensor(returns).float()
-        returns = (returns - returns.mean()) / (returns.std() + 1e-6)
-
-        # Compute the loss and update the policy
-        policy_loss = torch.stack(log_probs) * returns.unsqueeze(1)
-        policy_loss = -policy_loss.mean()
-        optimizer.zero_grad()
-        policy_loss.backward()
-        optimizer.step()
-
-        # Print the episode reward
-        print('Episode: %d, Reward: %d' % (episode, episode_reward))
-
-# Test the algorithm on the CartPole-v1 environment
-policy_gradient('CartPole-v1', 32, 0.01, 1000)
-'''
-
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 class ReinforcePolicy(nn.Module):
@@ -117,10 +33,17 @@ class ReinforcePolicy(nn.Module):
             state = state[0]
 
         state = torch.from_numpy(state).float().unsqueeze(0).to(device)
+
+        # Forward returns softmax output of actions
         probs = self.forward(state).cpu()
+
+        # Convert probabilities to categorical output (0, 1)
         m = Categorical(probs)
+
+        # Sample from the categorical output using the probabilities calc'd by NN
         action = m.sample()
 
+        # Return the action and the probability of the action
         return action.item(), m.log_prob(action)
     
 def reinforce(policy: ReinforcePolicy, optimizer, n_training_episodes, max_t, gamma, print_every):
@@ -137,15 +60,24 @@ def reinforce(policy: ReinforcePolicy, optimizer, n_training_episodes, max_t, ga
 
         # Generate an episode S_0, A_0, r_0, ..., S_T-1, A_T-1, r_T-1 as per pi_theta
         for t in range(max_t):
+
+            # Determine the action to take based on the current state
             action, log_prob = policy.act(state)
+
+            # Track the probability of the action selected
             saved_log_probs.append(log_prob)
+
+            # Step the environment using the selected action
             state, reward, done, _, _ = env.step(action)
 
+            # Track the reward generated
             rewards.append(reward)
 
+            # Check if this episode is finished
             if done:
                 break
 
+        # Calculate the cumulative reward generated from the episode
         cum_sum = sum(rewards)
         scores_deque.append(cum_sum)
         scores.append(cum_sum)
@@ -159,6 +91,7 @@ def reinforce(policy: ReinforcePolicy, optimizer, n_training_episodes, max_t, ga
             disc_return_t = (returns[0] if len(returns) > 0 else 0)
             returns.appendleft(gamma * disc_return_t + rewards[t])
 
+        # Determine the number of episodes completed
         eps = np.finfo(np.float32).eps.item()
 
         returns = torch.tensor(returns)
