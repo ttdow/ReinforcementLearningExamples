@@ -26,13 +26,5 @@ Example projects for Reinforcement Learning using PyTorch.
     <li>AIRL - https://towardsdatascience.com/infer-your-reward-by-observing-an-expert-140b685fd5b5</li>
     <li>SQIL - https://github.com/gouxiangchen/soft-Q-learning</li>
     <li>IQ-Learn - https://github.com/Div99/IQ-Learn</li>
-
 </ul>
 
-<h2> Other Non-RL Stuff </h2>
-
-<ul>
-    <li>NN - https://pytorch.org/tutorials/beginner/basics/buildmodel_tutorial.html</li>
-    <li>GAN - https://pytorch.org/tutorials/beginner/dcgan_faces_tutorial.html</li>
-    <li>CycleGAN - https://www.kaggle.com/code/songseungwon/cyclegan-tutorial-from-scratch-monet-to-photo</li>
-</ul>
