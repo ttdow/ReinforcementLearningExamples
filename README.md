@@ -8,10 +8,11 @@ Example projects for Reinforcement Learning using PyTorch.
 
 <ul>
     <li>QLearn - https://www.datacamp.com/tutorial/introduction-q-learning-beginner-tutorial</li>
-    <li>Reinforce - https://huggingface.co/blog/deep-rl-pg</li>
     <li>DQN - https://pytorch.org/tutorials/intermediate/reinforcement_q_learning.html</li>
     <li>DDQN - https://pytorch.org/tutorials/intermediate/mario_rl_tutorial.html</li>
     <li>SQL - https://github.com/gouxiangchen/soft-Q-learning</li>
+    <li>PolicyGradient - https://huggingface.co/learn/deep-rl-course/unit4/hands-on?fw=pt</li>
+    <li>Reinforce - https://huggingface.co/blog/deep-rl-pg</li>
     <li>A2C - https://huggingface.co/blog/deep-rl-a2c</li>
     <li>PPO - https://huggingface.co/blog/deep-rl-ppo</li>
     <li>SAC - https://github.com/toshikwa/sac-discrete.pytorch</li>
