@@ -1,106 +1,138 @@
-import gym
-import pybullet_envs
-
-import os
-
-from stable_baselines3 import A2C
-from stable_baselines3.common.evaluation import evaluate_policy
-from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
-from stable_baselines3.common.env_util import make_vec_env
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
 
 import torch
-from torch import nn
+import torch.nn as nn
+import torch.optim as optim
+import torch.nn.functional as F
+from torch.distributions import Categorical
+from torch.autograd import Variable
 
-# Policy-based methods aim to optimize the policy directly without using a
-#   value function.
+import gym
 
-# A2C (Advantage Actor Critic) uses an Actor-Critic method, a hybrid 
-#   architecture combining value-based and policy-based methods that help 
-#   to stabilize the training by reducing variance.
-# An Actor that controls how our agent behaves (policy-based method).
-# A Critic that measures how good the action taken is (value-based method).
+class ActorCritic(nn.Module):
+    
+    def __init__(self, input_size, output_size, hidden_size):
+        super(ActorCritic, self).__init__()
 
-# Initally the Actor tries random actions and the Critic provides feedback.
-# The Actor then uses this feedback to improve their policy and the Critic
-# updates their policy to give better feedback.
+        self.critic_linear1 = nn.Linear(input_size, hidden_size)
+        self.critic_linear2 = nn.Linear(hidden_size, 1)
 
-# We learn two function approximations:
-#   1. A Policy that controls how our agent acts: pi_theta(s, a)
-#   2. A value function to assist the policy update by measuring how good
-#       the action taken is q_hat_w(s, a)
+        self.actor_linear1 = nn.Linear(input_size, hidden_size)
+        self.actor_linear2 = nn.Linear(hidden_size, output_size)
 
-# The Actor-Critic process:
-#   1. At each timestep, t, we get the current state, S_t, from the environment
-#       and pass it as input through our Actor and Critic
-#   2. Our Policy takes the state and outputs an action, A_t
-#   3. The Critic takes that action as input and, using S_t and A_t, computes
-#       the value of taking that action at that state: the Q-value
-#   4. The action performed in the environment outputs a new state, S_t+1, 
-#       and a reward, R_t+1
-#   5. The Actor updates its policy parameters using the Q value.
-#   6. The Actor then takes A_t+1 in S_t+1
-#   7. The Critic updates its value function...
+        self.fc1 = nn.Linear(input_size, hidden_size)
+        self.fc2 = nn.Linear(hidden_size, hidden_size)
 
-# Advantage function:
-#   Calculates how better taking the action at a state is compared to the
-#       average value of the state.
-#   A(s, a) = Q(s, a) - V(s), where V(s) = the average value of the state
-#   This calculates the extra reward we get if we take this action at that
-#       state compared to the mean reward we get at that state - i.e. the
-#       advantage of choosing this action. If the advantage is positive,
-#       then the average value of that state is increasing, if the advantage
-#       is negative then the average value of that state is decreasing -
-#       i.e. gradient ascent.
+    def forward(self, x):
 
-# We can use the TD error as a good estimator of the advantage function:
-#   A(s, a) = Q(s, a) - V(s)
-#           = r + gamma * V(s') - V(s) = TD error4
+        if type(x) == tuple:
+            x = x[0]
 
-# Create env
-env_id = "AntBulletEnv-v0"
-env = gym.make(env_id)
+        x = Variable(torch.from_numpy(x).float().unsqueeze(0))
 
-# Get the state space and action space
-s_size = env.observation_space.shape[0]
-a_size = env.action_space
+        # Actor branch returns probability of selecting each action
+        policy_dist = F.relu(self.actor_linear1(x))
+        policy_dist = F.softmax(self.actor_linear2(policy_dist), dim=-1)
 
-# Visual shape of state space and action space
-print("Observation space:")
-print("State space size: ", s_size)
-print("Sample observation: ", env.observation_space.sample())
+        # Critic branch returns a categorization of state (i.e. good/bad)
+        value = F.relu(self.critic_linear1(x))
+        value = self.critic_linear2(value)
 
-print("Action space:")
-print("Action space size: ", a_size)
-print("Sample action: ", env.action_space.sample())
+        return policy_dist, value
+    
+# Create environment
+env = gym.make('CartPole-v1')
 
-# Normalize input features
-#env = VecNormalize(env, norm_obs=True, norm_reward=False, clip_obs=10.)
+# Set hyperparameters
+hidden_size = 256
+lr = 3e-4
+gamma = 0.99
+num_episodes = 3000
+num_steps = 300
 
-# Create A2C model
-model = A2C(policy="MlpPolicy", env=env, gae_lambda=0.9, gamma=0.99, learning_rate=0.00096, max_grad_norm=0.5, n_steps=8,
-            vf_coef=0.4, ent_coef=0.0, tensorboard_log="./tensorboard", policy_kwargs=dict(log_std_init=-2, ortho_init=False,
-            ), normalize_advantage=False, use_rms_prop=True, use_sde=True, verbose=1)
+# Create RL agent
+actor_critic = ActorCritic(env.observation_space.shape[0], env.action_space.n, hidden_size)#, lr, gamma)
+ac_optimizer = optim.Adam(actor_critic.parameters(), lr=lr)
 
-# Train the model
-model.learn(2000)
+# Loggables
+all_lengths = []
+average_lengths = []
+all_rewards = []
+entropy_term = 0
 
-# Save the model and VecNormalize statistics when saving the agent
-#model.save("a2c-AntBulletEnv-v0")
-#env.save("vec_normalize.pkl")
+for episode in range(num_episodes):
 
-# Load the statistics
-eval_env = model
-#eval_env = VecNormalize(env, eval_env)
+    log_probs = []
+    values = []
+    rewards = []
 
-# Do not update them at test time
-eval_env.training = False
+    state = env.reset()
+    done = False
 
-# Reward normalization is not needed at test time
-eval_env.norm_reward = False
+    # Step through an episode
+    for steps in range(num_steps):
 
-# Load the agent
-model = A2C.load("a2c-AntBulletEnv-v0")
+        policy_dist, value = actor_critic.forward(state)
+        value = value.detach().numpy()[0, 0]
+        dist = policy_dist.detach().numpy()
 
-mean_reward, std_reward = evaluate_policy(model, env)
+        action = np.random.choice(2, p=np.squeeze(dist))
+        log_prob = torch.log(policy_dist.squeeze(0)[action])
+        entropy = -np.sum(np.mean(dist) * np.log(dist))
+        new_state, reward, done, _, _ = env.step(action)
 
-print(f"Mean reward = {mean_reward:.2f} +/- {std_reward:.2f}")
+        rewards.append(reward)
+        values.append(value)
+        log_probs.append(log_prob)
+        entropy_term += entropy
+        state = new_state
+
+        if done or steps == num_steps-1:
+            Qval, _ = actor_critic.forward(new_state)
+            Qval = Qval.detach().numpy()[0, 0]
+            all_rewards.append(np.sum(rewards))
+            all_lengths.append(steps)
+            average_lengths.append(np.mean(all_lengths[-10:]))
+            if episode % 10 == 0:
+                print("Episode: " + str(episode) + " Reward: " + str(np.sum(rewards)) + " Steps: " + str(steps) + " Average Length: " + str(average_lengths[-1]))
+            break
+
+    # Compute Q-values
+    Qvals = np.zeros_like(values)
+    for t in reversed(range(len(rewards))):
+        Qval = rewards[t] + gamma * Qval
+        Qvals[t] = Qval
+
+    # Update actor-critic
+    values = torch.FloatTensor(values)
+    Qvals = torch.FloatTensor(Qvals)
+    log_probs = torch.stack(log_probs)
+
+    advantage = Qvals - values
+    actor_loss = (-log_probs * advantage).mean()
+    critic_loss = 0.5 * advantage.pow(2).mean()
+
+    ac_loss = actor_loss + critic_loss + 0.001 * entropy_term
+
+    ac_optimizer.zero_grad()
+    ac_loss.backward()
+    ac_optimizer.step()
+
+# Plot results
+smoothed_rewards = pd.Series.rolling(pd.Series(all_rewards), 10).mean()
+smoothed_rewards = [elem for elem in smoothed_rewards]
+
+plt.plot(all_rewards)
+plt.plot(smoothed_rewards)
+plt.plot()
+plt.xlabel('Episode')
+plt.ylabel('Reward')
+plt.show()
+
+plt.plot(all_lengths)
+plt.plot(average_lengths)
+plt.xlabel('Episode')
+plt.ylabel('Episode Length')
+plt.show()
