@@ -14,6 +14,7 @@ Example projects for Reinforcement Learning using PyTorch.
     <li>PolicyGradient - https://huggingface.co/learn/deep-rl-course/unit4/hands-on?fw=pt</li>
     <li>Reinforce - https://huggingface.co/blog/deep-rl-pg</li>
     <li>A2C - https://towardsdatascience.com/understanding-actor-critic-methods-931b97b6df3f</li>
+    <li>TRPO - https://medium.com/@vladogim97/trpo-minimal-pytorch-implementation-859e46c4232e</li>
     <li>PPO - https://huggingface.co/blog/deep-rl-ppo</li>
     <li>SAC - https://github.com/toshikwa/sac-discrete.pytorch</li>
     <li>DIAYN - https://github.com/alirezakazemipour/DIAYN-PyTorch</li>
