@@ -1,271 +1,366 @@
-import os
-import gym
 import numpy as np
+import time
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.optim as optim
-from torch.distributions.categorical import Categorical
+from torch.distributions import MultivariateNormal
 
-import matplotlib.pyplot as plt
+import gym
 
-# Proximal Policy Optimization (PPO) is an architecture that aims to improve our
-#   agent's training stability by avoiding too large policy updates. To do this,
-#   we use a ratio that will indicate the difference between our current and old
-#   policy and clip this ratio from a specific range [1 - epsilon, 1 + epsilon].
+class PPO():
 
-# Smaller policy updates during training are more likely to converge to an 
-#   optimal solution.
-# A "too big" step when updating a policy can cause "falling off the cliff" and
-#   having a long time or even no possibility to recover.
-# PPO removes the incentive for the current policy to go too far from the old 
-#   one (hence proximal)
+    # Initialize the PPO model, including the hyperparameters
+    def __init__(self, policy_class, env, **hyperparameters):
 
-# Policy objective function:
-#   L_PG(theta) = E_t(log(pi_theta(a_t | s_t)) * A_t)
-#               = E_t(log probability of (a_t | s_t)) * advantage if A>0
+        # Make sure the environment is compatible with our code.
+        assert(type(env.observation_space) == gym.spaces.Box)
+        assert(type(env.action_space) == gym.spaces.Box)
 
-# PPO's Clipped surrogate objective function:
-#   L_CLIP(theta) = E_hat_t(min(r_t(theta) * A_hat_t, clip(r_t(theta), 1-epsilon, 1+epsilon) * A_hat_t))
-#       Where: r_t(theta) = pi_theta(a_t | s_t) / pi_theta_old(a_t | s_t) # Ratio function
-#           If r_t(theta) > 1, the action a_t in state s_t is more likely in the current policy
-#               than in the previous policy and vice versa - i.e. the divergence between old and new
+        # Initialize hyperparameters for training with PPO.
+        self._init_hyperparameters(hyperparameters)
 
-# Trust Region Policy Optimization (TRPO) uses KL divergence constraints outside 
-#   the objective function to constrain the policy update.
-# PPO clip probability ratio directly in the objective function with its Clipped
-#   surrogate objective function.
+        # Extract environment information.
+        self.env = env
+        self.obs_dim = env.observation_space.shape[0]
+        self.act_dim = env.action_space.shape[0]
 
-# Final PPO's Actor Critic Objective Function
-#   L_t_CLIP+VF+S(theta) = E_hat_t(L_t_CLIP(theta) - c_1 * L_t_VF(theta) + c_2 * S(pi_theta)(s_t))
+        # Initialize actor and critic networks
+        self.actor = policy_class(self.obs_dim, self.act_dim)
+        self.critic = policy_class(self.obs_dim, 1)
 
-# Actor's neural net
-class ActorNetwork(nn.Module):
-    def __init__(self, n_actions, input_dims, alpha, fc1_dims=256, fc2_dims=256, chkpt_dir='ppo'):
-        super(ActorNetwork, self).__init__()
+        # Initialize optimizers for actor and critic
+        self.actor_optim = optim.Adam(self.actor.parameters(), lr=self.lr)
+        self.critic_optim = optim.Adam(self.critic.parameters(), lr=self.lr)
 
-        self.checkpoint_file = os.path.join(chkpt_dir, 'actor_torch_ppo')
+        # Initialize the covariance matrix used to query the actor for actions
+        self.cov_var = torch.full(size=(self.act_dim,), fill_value=0.5)
+        self.cov_mat = torch.diag(self.cov_var)
 
-        # Define nn structure
-        self.actor = nn.Sequential(
-            nn.Linear(*input_dims, fc1_dims),
-            nn.ReLU(),
-            nn.Linear(fc1_dims, fc2_dims),
-            nn.ReLU(),
-            nn.Linear(fc2_dims, n_actions),
-            nn.Softmax(dim=-1)
-        )
+        self.logger = {'delta_t': time.time_ns(),
+                       't_so_far': 0,
+                       'i_so_far': 0,
+                       'batch_lens': [],
+                       'batch_rews': [],
+                       'actor_losses': []}
+        
+    # Train the actor and critic networks.
+    def learn(self, total_timesteps):
 
-        self.optimizer = optim.Adam(self.parameters(), lr=alpha)
-        self.device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-        self.to(self.device)
+        t_so_far = 0
+        i_so_far = 0
 
-    def forward(self, state):
-        dist = self.actor(state)
-        dist = Categorical(dist)
-        return dist
+        while t_so_far < total_timesteps:
 
-    def save_checkpoint(self):
-        torch.save(self.state_dict(), self.checkpoint_file)
+            # Collect batch simulations.
+            batch_obs, batch_acts, batch_log_probs, batch_rtgs, batch_lens = self.rollout()
 
-    def load_checkpoint(self):
-        self.load_state_dict(torch.load(self.checkpoint_file))
+            # Calculate how many timesteps we collected this batch.
+            t_so_far += np.sum(batch_lens)
 
-class CriticNetwork(nn.Module):
-    def __init__(self, input_dims, alpha, fc1_dims=256, fc2_dims=256, chkpt_dir='ppo'):
-        super(CriticNetwork, self).__init__()
+            # Increment the number of iterations.
+            i_so_far += 1
 
-        self.checkpoint_file = os.path.join(chkpt_dir, 'critic_torch_ppo')
+            # Logging timesteps so far and iterations so far.
+            self.logger['t_so_far'] = t_so_far
+            self.logger['i_so_far'] = i_so_far
 
-        # Define nn structure
-        self.critic = nn.Sequential(
-            nn.Linear(*input_dims, fc1_dims),
-            nn.ReLU(),
-            nn.Linear(fc1_dims, fc2_dims),
-            nn.ReLU(),
-            nn.Linear(fc2_dims, 1)
-        )
+            # Calculate the advantage at the k-th iteration.
+            V, _ = self.evaluate(batch_obs, batch_acts)
+            A_k = batch_rtgs - V.detach()
 
-        self.optimizer = optim.Adam(self.parameters(), lr=alpha)
-        self.device = torch.device('cuda:0' if torch.cuda.  is_available() else 'cpu')
-        self.to(self.device)
+            # Normalize advantages to reduce variance.
+            A_k = (A_k - A_k.mean()) / (A_k.std() + 1e-10)
 
-    def forward(self, state):
-        value = self.critic(state)
-        return value
+            # This is the loop where we update our network for some n epochs.
+            for _ in range(self.n_updates_per_iteration):
 
-    def save_checkpoint(self):
-        torch.save(self.state_dict(), self.checkpoint_file)
+                # Calculate V_phi and phi_theta(a_t | s_t).
+                V, curr_log_probs = self.evaluate(batch_obs, batch_acts)
 
-    def load_checkpoint(self):
-        self.load_state_dict(torch.load(self.checkpoint_file))
+                # Calculate the ratio pi_theta(a_t | s_t) / phi_theta_k(a_t | s_t).
+                ratios = torch.exp(curr_log_probs - batch_log_probs)
 
-class PPOMemory:
-    def __init__(self, batch_size):
-        self.clear_memory()
+                # Calculate surrogate losses.
+                surr1 = ratios * A_k
+                surr2 = torch.clamp(ratios, 1 - self.clip, 1 + self.clip) * A_k
 
-        self.batch_size = batch_size
+                # Calculate the actor and critic losses.
+                actor_loss = (-torch.min(surr1, surr2)).mean()
+                critic_loss = nn.MSELoss()(V, batch_rtgs)
 
-    def generate_batches(self):
-        n_states = len(self.states)
-        batch_start = np.arange(0, n_states, self.batch_size) # [start, stop), step
-        indices = np.arange(n_states, dtype=np.int64)
-        np.random.shuffle(indices)
-        batches = [indices[i:i+self.batch_size] for i in batch_start]
+                # Calculate gradients and perform backward propagation for actor network.
+                self.actor_optim.zero_grad()
+                actor_loss.backward(retain_graph=True)
+                self.actor_optim.step()
 
-        return np.array(self.states), np.array(self.actions), np.array(self.probs), np.array(self.vals), np.array(self.rewards), np.array(self.dones), batches
+                # Calculate gradients and perform backward propagation for critic network.
+                self.critic_optim.zero_grad()
+                critic_loss.backward()
+                self.critic_optim.step()
 
-    def store_memory(self, state, action, probs, vals, reward, done):
-        self.states.append(state)
-        self.actions.append(action)
-        self.probs.append(probs)
-        self.vals.append(vals)
-        self.rewards.append(reward)
-        self.dones.append(done)
+                # Log actor loss.
+                self.logger['actor_losses'].append(actor_loss.detach())
 
-    def clear_memory(self):
-        self.states = []
-        self.probs = []
-        self.vals = []
-        self.actions = []
-        self.rewards = []
-        self.dones = []
+            # Print a summary of our training thus far.
+            self._log_summary()
 
-class Agent:
-    def __init__(self, n_actions, input_dims, gamma=0.99, alpha=0.0003, gae_lambda=0.95, policy_clip=0.2, batch_size=64, n_epochs=10):
-        self.gamma = gamma
-        self.policy_clip = policy_clip
-        self.n_epochs = n_epochs
-        self.gae_lambda = gae_lambda
+            # Save our model if it's time.
+            if i_so_far % self.save_freq == 0:
+                torch.save(self.actor.state_dict(), './ppo_actor.pt')
+                torch.save(self.critic.state_dict(), './ppo_critic.pt')
 
-        self.actor = ActorNetwork(n_actions, input_dims, alpha)
-        self.critic = CriticNetwork(input_dims, alpha)
-        self.memory = PPOMemory(batch_size)
+    # Collect the batch of data for simulation.
+    def rollout(self):
 
-    def remember(self, state, action, probs, vals, reward, done):
-        self.memory.store_memory(state, action, probs, vals, reward, done)
+        # Batch data.
+        batch_obs = []
+        batch_acts = []
+        batch_log_probs = []
+        batch_rews = []
+        batch_rtgs = []
+        batch_lens = []
 
-    def save_models(self):
-        print("Saving model...")
-        self.actor.save_checkpoint()
-        self.critic.save_checkpoint()
+        # Episodic reward data.
+        ep_rews = []
 
-    def load_models(self):
-        print("Loading model...")
-        self.actor.load_checkpoint()
-        self.critic.load_checkpoint()
+        # Track timesteps this batch.
+        t = 0
 
-    def choose_action(self, observation):
-        state = torch.tensor(np.array(observation), dtype=torch.float).to(self.actor.device)
+        # Keep simulating until we've run more than or equal to the specified timesteps per batch.
+        while t < self.timesteps_per_batch:
 
-        dist = self.actor(state)
-        value = self.critic(state)
+            # Reset rewards for this episode.
+            ep_rews = []
+
+            # Reset the environment.
+            obs = self.env.reset()
+
+            if type(obs) == tuple:
+                obs = obs[0]
+
+            done = False
+
+            # Run an episode for a maximum of max_timesteps_per_episode timesteps.
+            for ep_t in range(self.max_timesteps_per_episode):
+
+                # If render is specified, render the environment.
+                if self.render and (self.logger['i_so_far'] % self.render_every_i == 0) and len(batch_lens) == 0:
+                    self.env.render()
+
+                # Update timestep counter.
+                t += 1
+
+                # Track observations in this batch.
+                batch_obs.append(obs)
+
+                # Calculate action and make a step in the environment.
+                action, log_prob = self.get_action(obs)
+                obs, rew, done, _, _ = self.env.step(action)
+
+                # Track recent reward, action, and action log probability.
+                ep_rews.append(rew)
+                batch_acts.append(action)
+                batch_log_probs.append(log_prob)
+
+                # If the environment tells us the episode is terminated, break.
+                if done:
+                    break
+            
+            # Track episodic lengths and rewards.
+            batch_lens.append(ep_t + 1)
+            batch_rews.append(ep_rews)
+
+        print(len(batch_obs))
+
+        # Reshape data as tensors in the shape specified in function description, before returning.
+        batch_obs = torch.tensor(batch_obs, dtype=torch.float)
+        batch_acts = torch.tensor(batch_acts, dtype=torch.float)
+        batch_log_probs = torch.tensor(batch_log_probs, dtype=torch.float)
+        batch_rtgs = self.compute_rtgs(batch_rews)
+
+        # Log the episodic returns and episodic lengths in this batch.
+        self.logger['batch_rews'] = batch_rews
+        self.logger['batch_lens'] = batch_lens
+
+        return batch_obs, batch_acts, batch_log_probs, batch_rtgs, batch_lens
+    
+    # Compute the reward-to-go of each timestep in a batch given the rewards.
+    def compute_rtgs(self, batch_rews):
+
+        # The rewards-to-go (rtg) per episode per batch to return. [num_timesteps]
+        batch_rtgs = []
+
+        # Iterate through each episode.
+        for ep_rews in reversed(batch_rews):
+
+            # The discounted reward so far.
+            discounted_reward = 0
+
+            # Iterate through all rewards in the episode. We go backwards for smoother calculation
+            # of each discounted return.
+            for rew in reversed(ep_rews):
+                discounted_reward = rew + discounted_reward * self.gamma
+                batch_rtgs.insert(0, discounted_reward)
+
+        # Convert the rewards-to-go into a tensor.
+        batch_rtgs = torch.tensor(batch_rtgs, dtype=torch.float)
+
+        return batch_rtgs
+    
+    # Queries an action from the actor network.
+    def get_action(self, obs):
+
+        # Query the actor network for a mean action.
+        mean = self.actor(obs)
+
+        # Create a distribution with the mean action and std from the covariance matrix above.
+        dist = MultivariateNormal(mean, self.cov_mat)
+
+        # Sample an action from the distribution.
         action = dist.sample()
 
-        probs = torch.squeeze(dist.log_prob(action)).item()
-        action = torch.squeeze(action).item()
-        value = torch.squeeze(value).item()
+        # Calculate the log probability for that action.
+        log_prob = dist.log_prob(action)
 
-        return action, probs, value
+        # Return the sampled action and the log probability of that action in our distribution.
+        return action.detach().numpy(), log_prob.detach()
+    
+    # Estimate the values of each observation and the log probs of each action in the most
+    # recent batch with the most recent iteration of the actor network.
+    def evaluate(self, batch_obs, batch_acts):
 
-    def learn(self):
-        for _ in range(self.n_epochs):
-            state_arr, action_arr, old_prob_arr, vals_arr, reward_arr, dones_arr, batches = self.memory.generate_batches()
-            values = vals_arr
-            advantage = np.zeros(len(reward_arr), dtype=np.float32)
+        # Query critic network for a value V for each batch_obs. [num_timesteps]
+        V = self.critic(batch_obs).squeeze()
 
-            for t in range(len(reward_arr) - 1):
-                discount = 1
-                a_t = 0
-                for k in range(t, len(reward_arr) - 1):
-                    a_t += discount*(reward_arr[k] + self.gamma * values[k+1] * (1 - int(dones_arr[k])) - values[k])
-                    discount *= self.gamma * self.gae_lambda
+        # Calculate the log probabilities of batch actions using most recent actor network.
+        mean = self.actor(batch_obs)
+        dist = MultivariateNormal(mean, self.cov_mat)
+        log_probs = dist.log_prob(batch_acts)
 
-                advantage[t] = a_t
-            advantage = torch.tensor(advantage).to(self.actor.device)
+        # Return the value vector V of each observation in the batch and log probabilities
+        # log_probs of each action in the bacth.
+        return V, log_probs
 
-            values = torch.tensor(values).to(self.actor.device)
-            for batch in batches:
-                states = torch.tensor(state_arr[batch], dtype=torch.float).to(self.actor.device)
-                old_probs = torch.tensor(old_prob_arr[batch]).to(self.actor.device)
-                actions = torch.tensor(action_arr[batch]).to(self.actor.device)
+    # Initialize default and custom values for hyperparameters.
+    def _init_hyperparameters(self, hyperparameters):
 
-                dist = self.actor(states)
-                critic_value = self.critic(states)
+        # Initialize default values for hyperparameters.
+        self.timesteps_per_batch = 4800
+        self.max_timesteps_per_episode = 1600
+        self.n_updates_per_iteration = 5
+        self.lr = 0.005
+        self.gamma = 0.95
+        self.clip = 0.2
 
-                critic_value = torch.squeeze(critic_value)
+        # Misc. parameters.
+        self.render = True
+        self.render_every_i = 10
+        self.save_freq = 10
+        self.seed = None
 
-                new_probs = dist.log_prob(actions)
-                prob_ratio = new_probs.exp() / old_probs.exp()
-                weighted_probs = advantage[batch] * prob_ratio
-                weighted_clipped_probs = torch.clamp(prob_ratio, 1 - self.policy_clip, 1 + self.policy_clip)*advantage[batch]
-                actor_loss = -torch.min(weighted_probs, weighted_clipped_probs).mean()
+        # Change any default values to custom values for specified hyperparameters.
+        for param, val in hyperparameters.items():
+            exec('self.' + param + ' = ' + str(val))
 
-                returns = advantage[batch] + values[batch]
-                critic_loss = (returns - critic_value)**2
-                critic_loss = critic_loss.mean()
+        # Sets the seed if specified.
+        if self.seed != None:
 
-                total_loss = actor_loss + 0.5 * critic_loss
-                self.actor.optimizer.zero_grad()
-                self.critic.optimizer.zero_grad()
-                total_loss.backward()
-                self.actor.optimizer.step()
-                self.critic.optimizer.step()
+            # Check if our seed is valid.
+            assert(type(self.seed) == int)
 
-        self.memory.clear_memory()
+            # Set the seed.
+            torch.manual_seed(self.seed)
 
-def plot_learning_curve(x, scores, figure_file):
-    running_avg = np.zeros(len(scores))
-    for i in range(len(running_avg)):
-        running_avg[i] = np.mean(scores[max(0, i-100):(i+1)])
-    plt.plot(x, running_avg)
-    plt.title("Running average of previous 100 scores")
-    plt.savefig(figure_file)
+    # Print to stdout what we've logged so far in the most recent batch.
+    def _log_summary(self):
 
-# Make environment            
-env = gym.make('CartPole-v1')
-N = 20
-batch_size = 5
-n_epochs = 4
-alpha = 0.0003
+        # Calculate logging values.
+        delta_t = self.logger['delta_t']
+        self.logger['delta_t'] = time.time_ns()
+        delta_t = (self.logger['delta_t'] - delta_t) / 1e9
+        delta_t = str(round(delta_t, 2))
 
-# Make agent
-agent = Agent(n_actions=env.action_space.n, batch_size=batch_size, alpha=alpha, n_epochs=n_epochs, input_dims=env.observation_space.shape)
-n_episodes = 300
-figure_file = 'ppo/cartpole.png'
-best_score = env.reward_range[0]
-score_history = []
+        t_so_far = self.logger['t_so_far']
+        i_so_far = self.logger['i_so_far']
 
-learn_iters = 0
-avg_score = 0
-n_steps = 0
+        avg_ep_lens = np.mean(self.logger['batch_lens'])
+        avg_ep_rews = np.mean([np.sum(ep_rews) for ep_rews in self.logger['batch_rews']])
+        avg_actor_loss = np.mean([losses.float().mean() for losses in self.logger['actor_losses']])
 
-for i in range(n_episodes):
-    observation = env.reset() # Get new state
-    done = False
-    score = 0
+        # Round decimal places for more aesthetic logging messages.
+        avg_ep_lens = str(round(avg_ep_lens, 2))
+        avg_ep_rews = str(round(avg_ep_rews, 2))
+        avg_actor_loss = str(round(avg_actor_loss, 5))
 
-    while not done:
-        action, prob, val = agent.choose_action(observation) # Get agent's next action
-        observation_, reward, done, info = env.step(action) # Play out action
-        n_steps += 1
-        score += reward
-        agent.remember(observation, action, prob, val, reward, done) # Save outcomes
-        
-        if n_steps % N == 0:
-            agent.learn() # Update policy
-            learn_iters += 1
-        
-        observation = observation_ # Update current state
+        # Print logging statements.
+        print(flush=True)
+        print(f"-------------------- Iteration #{i_so_far} --------------------", flush=True)
+        print(f"Average Episodic Length: {avg_ep_lens}", flush=True)
+        print(f"Average Episodic Return: {avg_ep_rews}", flush=True)
+        print(f"Average Loss: {avg_actor_loss}", flush=True)
+        print(f"Timesteps So Far: {t_so_far}", flush=True)
+        print(f"Iteration took: {delta_t} secs", flush=True)
+        print(f"------------------------------------------------------", flush=True)
+        print(flush=True)
 
-    # Update score
-    score_history.append(score)
-    avg_score = np.mean(score_history[-100:])
+        # Reset batch-specific logging data.
+        self.logger['batch_lens'] = []
+        self.logger['batch_rews'] = []
+        self.logger['actor_losses'] = []
 
-    if avg_score > best_score:
-        best_score = avg_score
-        agent.save_models()
+# A standard in_dim-64-64-out_dim feed forward neural network.
+class Net(nn.Module):
 
-    print('episode: ', i, ' score: %.1f' % score, ' avg score: %.1f' % avg_score, 'time_steps', n_steps, 'learning_steps', learn_iters)
-    x = [i+1 for i in range(len(score_history))]
-    plot_learning_curve(x, score_history, figure_file)
+    # Initialize the network and set up the layers.
+    def __init__(self, in_dim, out_dim):
+        super(Net, self).__init__()
+
+        self.layer1 = nn.Linear(in_dim, 64)
+        self.layer2 = nn.Linear(64, 64)
+        self.layer3 = nn.Linear(64, out_dim)
+
+    # Runs a forward pass through the neural network.
+    def forward(self, obs):
+
+        if type(obs) == tuple:
+            obs = obs[0]
+
+        # Convert observation to tensor if it's a numpy array.
+        if isinstance(obs, np.ndarray):
+            obs = torch.tensor(obs, dtype=torch.float)
+
+        activation1 = F.relu(self.layer1(obs))
+        activation2 = F.relu(self.layer2(activation1))
+        output = self.layer3(activation2)
+
+        return output
+
+# Trains the model.
+def train(env, hyperparameters):
+
+    # Create a model for PPO.
+    model = PPO(policy_class=Net, env=env, **hyperparameters)
+
+    model.learn(total_timesteps=200_000_000)
+
+def main():
+    hyperparameters = {
+				'timesteps_per_batch': 2048, 
+				'max_timesteps_per_episode': 200, 
+				'gamma': 0.99, 
+				'n_updates_per_iteration': 10,
+				'lr': 3e-4, 
+				'clip': 0.2,
+				'render': True,
+				'render_every_i': 10
+			  }
+    
+    # Create gym environment.
+    env = gym.make('Pendulum-v1', render_mode="rgb_array")
+
+    train(env, hyperparameters)
+
+if __name__ == '__main__':
+    main()
