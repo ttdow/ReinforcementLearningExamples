@@ -18,6 +18,7 @@ Example projects for Reinforcement Learning using PyTorch.
     <li>PPO - https://github.com/ericyangyu/PPO-for-Beginners</li>
     <li>SAC - https://github.com/toshikwa/sac-discrete.pytorch</li>
     <li>DIAYN - https://github.com/alirezakazemipour/DIAYN-PyTorch</li>
+    <li>Unity ML Agents - https://medium.com/analytics-vidhya/ppo-algorithm-with-custom-rl-environment-made-with-unity-engine-effed6d98b9d</li>
 </ul>
 
 <h2> Inverse Reinforcement Learning </h2>
