@@ -172,6 +172,9 @@ class PPO():
             batch_lens.append(ep_t + 1)
             batch_rews.append(ep_rews)
 
+        for ep_reward in batch_rews:
+            print(sum(ep_reward) / len(ep_reward))   
+
         print(len(batch_obs))
 
         # Reshape data as tensors in the shape specified in function description, before returning.
